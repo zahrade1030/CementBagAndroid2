@@ -8,6 +8,7 @@ import android.view.MotionEvent
 import android.view.View
 import kotlin.math.abs
 import kotlin.math.min
+import kotlin.math.max
 
 class DetectionOverlay(context: Context) : View(context) {
 
@@ -49,7 +50,7 @@ class DetectionOverlay(context: Context) : View(context) {
 
         if (imageW <= 0f || imageH <= 0f || width == 0 || height == 0) return
 
-        val scale = min(width / imageW, height / imageH)
+        val scale = max(width / imageW, height / imageH)
         val offsetX = (width - imageW * scale) / 2f
         val offsetY = (height - imageH * scale) / 2f
 
@@ -96,7 +97,7 @@ class DetectionOverlay(context: Context) : View(context) {
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (!isSetup) return false
 
-        val scale = min(width / imageW, height / imageH)
+        val scale = max(width / imageW, height / imageH)
         val offsetY = (height - imageH * scale) / 2f
 
         when (event.action) {
