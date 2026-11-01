@@ -7,8 +7,8 @@ import android.graphics.Paint
 import android.view.MotionEvent
 import android.view.View
 import kotlin.math.abs
-import kotlin.math.min
 import kotlin.math.max
+import kotlin.math.min
 
 class DetectionOverlay(context: Context) : View(context) {
 
@@ -18,10 +18,16 @@ class DetectionOverlay(context: Context) : View(context) {
 
     private var imageW = 640f
     private var imageH = 640f
-    private var detections: List<Detection> = emptyList()
 
-    private val boxPaint = Paint(3).apply {
+    private var points: List<TrackedPoint> = emptyList()
+
+    private val pointPaint = Paint(3).apply {
         color = Color.GREEN
+        style = Paint.Style.FILL
+    }
+
+    private val ringPaint = Paint(3).apply {
+        color = Color.WHITE
         style = Paint.Style.STROKE
         strokeWidth = 3f
     }
@@ -38,8 +44,8 @@ class DetectionOverlay(context: Context) : View(context) {
 
     private var dragging = 0
 
-    fun setDetections(list: List<Detection>, w: Int, h: Int) {
-        detections = list
+    fun setTrackedPoints(list: List<TrackedPoint>, w: Int, h: Int) {
+        points = list
         imageW = w.toFloat()
         imageH = h.toFloat()
         invalidate()
@@ -54,18 +60,21 @@ class DetectionOverlay(context: Context) : View(context) {
         val offsetX = (width - imageW * scale) / 2f
         val offsetY = (height - imageH * scale) / 2f
 
-        detections.forEach {
-            val left = it.left * scale + offsetX
-            val top = it.top * scale + offsetY
-            val right = it.right * scale + offsetX
-            val bottom = it.bottom * scale + offsetY
+        points.forEach { point ->
 
-            canvas.drawRect(left, top, right, bottom, boxPaint)
+            val x = point.x * scale + offsetX
+            val y = point.y * scale + offsetY
+
+            pointPaint.color =
+                if (point.counted) Color.CYAN else Color.GREEN
+
+            canvas.drawCircle(x, y, 11f, pointPaint)
+            canvas.drawCircle(x, y, 16f, ringPaint)
 
             canvas.drawText(
-                "${(it.confidence * 100).toInt()}%",
-                left,
-                (top - 8f).coerceAtLeast(28f),
+                "#${point.id}",
+                x + 18f,
+                y - 15f,
                 textPaint
             )
         }
@@ -87,7 +96,7 @@ class DetectionOverlay(context: Context) : View(context) {
         )
 
         canvas.drawText(
-            if (isSetup) "برای جابه‌جایی خط لمس کن" else "خطوط قفل هستند",
+            if (isSetup) "خطوط را جابه‌جا کن" else "ردیابی فعال",
             18f,
             38f,
             textPaint
@@ -101,9 +110,13 @@ class DetectionOverlay(context: Context) : View(context) {
         val offsetY = (height - imageH * scale) / 2f
 
         when (event.action) {
+
             MotionEvent.ACTION_DOWN -> {
                 val y = (event.y - offsetY) / scale
-                dragging = if (abs(y - lineTop) < abs(y - lineBottom)) 1 else 2
+
+                dragging =
+                    if (abs(y - lineTop) < abs(y - lineBottom)) 1 else 2
+
                 return true
             }
 
@@ -111,11 +124,8 @@ class DetectionOverlay(context: Context) : View(context) {
                 val y = ((event.y - offsetY) / scale)
                     .coerceIn(20f, imageH - 20f)
 
-                if (dragging == 1) {
-                    lineTop = y
-                } else if (dragging == 2) {
-                    lineBottom = y
-                }
+                if (dragging == 1) lineTop = y
+                else if (dragging == 2) lineBottom = y
 
                 invalidate()
                 return true
