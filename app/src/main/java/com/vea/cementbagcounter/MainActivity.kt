@@ -26,6 +26,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var detector: YoloDetector
 
     private val executor = Executors.newSingleThreadExecutor()
+
     private var running = true
     private var setupMode = true
     private var totalCount = 0
@@ -33,18 +34,25 @@ class MainActivity : AppCompatActivity() {
     private val tracker = SimpleLineCounter()
 
     private val permission =
-        registerForActivityResult(ActivityResultContracts.RequestPermission()) {
-            if (it) startCamera()
-            else statusText.text = "مجوز دوربین داده نشد"
+        registerForActivityResult(
+            ActivityResultContracts.RequestPermission()
+        ) {
+            if (it) {
+                startCamera()
+            } else {
+                statusText.text = "مجوز دوربین داده نشد"
+            }
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         detector = YoloDetector(this)
+
         buildUi()
 
-        if (ContextCompat.checkSelfPermission(
+        if (
+            ContextCompat.checkSelfPermission(
                 this,
                 Manifest.permission.CAMERA
             ) == PackageManager.PERMISSION_GRANTED
@@ -77,10 +85,12 @@ class MainActivity : AppCompatActivity() {
         overlay = DetectionOverlay(this)
 
         val cameraFrame = android.widget.FrameLayout(this)
+
         cameraFrame.addView(
             preview,
             android.widget.FrameLayout.LayoutParams(-1, -1)
         )
+
         cameraFrame.addView(
             overlay,
             android.widget.FrameLayout.LayoutParams(-1, -1)
@@ -126,7 +136,12 @@ class MainActivity : AppCompatActivity() {
             setupMode = false
             overlay.isSetup = false
             running = true
-            tracker.setLines(overlay.lineTop, overlay.lineBottom)
+
+            tracker.setLines(
+                overlay.lineTop,
+                overlay.lineBottom
+            )
+
             statusText.text = "شمارش فعال است"
         }
 
@@ -143,7 +158,12 @@ class MainActivity : AppCompatActivity() {
         }
 
         base.addView(header)
-        base.addView(cameraFrame, LinearLayout.LayoutParams(-1, 0, 1f))
+
+        base.addView(
+            cameraFrame,
+            LinearLayout.LayoutParams(-1, 0, 1f)
+        )
+
         base.addView(countText)
         base.addView(statusText)
         base.addView(buttons)
@@ -179,44 +199,57 @@ class MainActivity : AppCompatActivity() {
                     return@setAnalyzer
                 }
 
+                var bitmap: android.graphics.Bitmap? = null
+
                 try {
-                    val bitmap = ImageUtil.toBitmap(image)
+
+                    bitmap = ImageUtil.toBitmap(image)
+
                     val detections = detector.detect(bitmap)
+
+                    val imageWidth = bitmap.width
+                    val imageHeight = bitmap.height
 
                     runOnUiThread {
 
-                        overlay.setDetections(
-                            detections,
-                            bitmap.width,
-                            bitmap.height
-                        )
-
                         if (!setupMode) {
+
                             totalCount += tracker.update(detections)
+
                             countText.text = "تعداد: $totalCount"
+
+                            overlay.setTrackedPoints(
+                                tracker.getTrackedPoints(),
+                                imageWidth,
+                                imageHeight
+                            )
                         }
                     }
 
-                    bitmap.recycle()
-
                 } catch (e: Exception) {
+
                     android.util.Log.e(
                         "CAMERA",
                         "Processing error",
                         e
                     )
+
                 } finally {
+
+                    bitmap?.recycle()
                     image.close()
                 }
             }
 
             try {
+
                 provider.unbindAll()
 
                 val viewPort = preview.viewPort
 
                 if (viewPort == null) {
-                    statusText.text = "در حال آماده‌سازی تصویر دوربین..."
+                    statusText.text =
+                        "در حال آماده‌سازی تصویر دوربین..."
                     return@addListener
                 }
 
@@ -235,7 +268,9 @@ class MainActivity : AppCompatActivity() {
                 statusText.text = "دوربین آماده است"
 
             } catch (e: Exception) {
-                statusText.text = "خطای دوربین: ${e.localizedMessage}"
+
+                statusText.text =
+                    "خطای دوربین: ${e.localizedMessage}"
             }
 
         }, ContextCompat.getMainExecutor(this))
