@@ -1,6 +1,5 @@
 package com.vea.cementbagcounter
 
-import kotlin.math.abs
 import kotlin.math.sqrt
 
 data class TrackedPoint(
@@ -17,9 +16,17 @@ class SimpleLineCounter {
         var x: Float,
         var y: Float,
         var previousY: Float,
+        var velocityX: Float = 0f,
+        var velocityY: Float = 0f,
         var armed: Boolean = false,
         var counted: Boolean = false,
         var missed: Int = 0
+    )
+
+    private data class Match(
+        val track: Track,
+        val detectionIndex: Int,
+        val distance: Float
     )
 
     private val tracks = mutableMapOf<Int, Track>()
@@ -31,6 +38,8 @@ class SimpleLineCounter {
 
     private val maxMissedFrames = 12
     private val maxDistance = 140f
+    private val positionSmoothing = 0.65f
+    private val velocitySmoothing = 0.5f
 
     fun setLines(top: Float, bottom: Float) {
         topLine = minOf(top, bottom)
@@ -61,59 +70,101 @@ class SimpleLineCounter {
 
         var newCounts = 0
 
-        val availableTracks = tracks.values
-            .filter { it.missed > 0 && it.missed <= maxMissedFrames }
-            .toMutableSet()
+        val candidates = mutableListOf<Match>()
 
-        val matchedTracks = mutableSetOf<Int>()
+        // Predict each track's next position and compare it
+        // with all current detections.
+        for (track in tracks.values) {
 
-        for (d in detections) {
+            if (track.missed > maxMissedFrames) continue
 
-            val candidate = availableTracks
-                .filter { it.id !in matchedTracks }
-                .map { track ->
-                    val dx = track.x - d.cx
-                    val dy = track.y - d.cy
-                    track to sqrt(dx * dx + dy * dy)
-                }
-                .filter { it.second < maxDistance }
-                .minByOrNull { it.second }
-                ?.first
+            val predictedX =
+                track.x + track.velocityX * track.missed
 
-            val track = if (candidate != null) {
-                candidate.also {
-                    matchedTracks.add(it.id)
-                }
-            } else {
-                Track(
-                    id = nextId++,
-                    x = d.cx,
-                    y = d.cy,
-                    previousY = d.cy
-                ).also {
-                    tracks[it.id] = it
+            val predictedY =
+                track.y + track.velocityY * track.missed
+
+            val allowedDistance = minOf(
+                maxDistance + track.missed * 5f,
+                180f
+            )
+
+            for (index in detections.indices) {
+
+                val detection = detections[index]
+
+                val dx = predictedX - detection.cx
+                val dy = predictedY - detection.cy
+
+                val distance = sqrt(dx * dx + dy * dy)
+
+                if (distance < allowedDistance) {
+                    candidates.add(
+                        Match(track, index, distance)
+                    )
                 }
             }
+        }
+
+        // Assign the closest pairs first.
+        candidates.sortBy { it.distance }
+
+        val matchedTrackIds = mutableSetOf<Int>()
+        val matchedDetectionIndices = mutableSetOf<Int>()
+
+        val assignments = mutableListOf<Match>()
+
+        for (match in candidates) {
+
+            if (match.track.id in matchedTrackIds) continue
+            if (match.detectionIndex in matchedDetectionIndices) continue
+
+            matchedTrackIds.add(match.track.id)
+            matchedDetectionIndices.add(match.detectionIndex)
+
+            assignments.add(match)
+        }
+
+        // Update matched tracks.
+        for (match in assignments) {
+
+            val track = match.track
+            val detection = detections[match.detectionIndex]
 
             val oldY = track.y
+            val elapsedFrames = track.missed.coerceAtLeast(1).toFloat()
 
             track.previousY = oldY
 
-            // Smooth the center to reduce small detection jumps.
-            track.x = track.x * 0.35f + d.cx * 0.65f
-            track.y = track.y * 0.35f + d.cy * 0.65f
+            val measuredVelocityX =
+                (detection.cx - track.x) / elapsedFrames
+
+            val measuredVelocityY =
+                (detection.cy - track.y) / elapsedFrames
+
+            track.velocityX =
+                track.velocityX * (1f - velocitySmoothing) +
+                measuredVelocityX * velocitySmoothing
+
+            track.velocityY =
+                track.velocityY * (1f - velocitySmoothing) +
+                measuredVelocityY * velocitySmoothing
+
+            track.x =
+                track.x * (1f - positionSmoothing) +
+                detection.cx * positionSmoothing
+
+            track.y =
+                track.y * (1f - positionSmoothing) +
+                detection.cy * positionSmoothing
 
             track.missed = 0
 
-            // Arm the track after it enters the area between the lines.
-            if (
-                track.y > topLine &&
-                track.y < bottomLine
-            ) {
+            if (track.y > topLine && track.y < bottomLine) {
                 track.armed = true
             }
 
-            // Count only when crossing the second line downward.
+            // Count only one downward crossing per track.
             if (
                 track.armed &&
                 !track.counted &&
@@ -125,6 +176,28 @@ class SimpleLineCounter {
             }
         }
 
+        // Create tracks for unmatched detections.
+        for (index in detections.indices) {
+
+            if (index in matchedDetectionIndices) continue
+
+            val detection = detections[index]
+
+            val track = Track(
+                id = nextId++,
+                x = detection.cx,
+                y = detection.cy,
+                previousY = detection.cy
+            )
+
+            if (track.y > topLine && track.y < bottomLine) {
+                track.armed = true
+            }
+
+            tracks[track.id] = track
+        }
+
+        // Remove tracks that have been missing too long.
         tracks.entries.removeAll {
             it.value.missed > maxMissedFrames
         }
