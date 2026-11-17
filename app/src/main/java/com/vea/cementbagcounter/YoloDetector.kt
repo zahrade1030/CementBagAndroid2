@@ -36,7 +36,7 @@ class YoloDetector(context: Context) {
     private val outputChannels = 5
     private val outputCandidates = 8400
 
-    private val confidenceThreshold = 0.40f
+    private val confidenceThreshold = 0.10f
     private val nmsThreshold = 0.45f
 
     private val maxCandidates = 1000
