@@ -19,8 +19,11 @@ data class Detection(
     val bottom: Float,
     val confidence: Float
 ) {
-    val cx get() = (left + right) / 2f
-    val cy get() = (top + bottom) / 2f
+    val cx: Float
+        get() = (left + right) / 2f
+
+    val cy: Float
+        get() = (top + bottom) / 2f
 }
 
 class YoloDetector(context: Context) {
@@ -30,6 +33,8 @@ class YoloDetector(context: Context) {
     private val inputName: String
 
     private val inputSize = 640
+    private val outputChannels = 5
+    private val outputCandidates = 8400
 
     private val confidenceThreshold = 0.20f
     private val nmsThreshold = 0.45f
@@ -38,6 +43,7 @@ class YoloDetector(context: Context) {
     private val maxDetections = 60
 
     init {
+
         val model = context.assets.open("best.onnx").use {
             it.readBytes()
         }
@@ -47,12 +53,20 @@ class YoloDetector(context: Context) {
 
         Log.i("YOLO", "Model loaded successfully")
         Log.i("YOLO", "Input: $inputName")
-        Log.i("YOLO", "Input size: $inputSize x $inputSize")
+        Log.i(
+            "YOLO",
+            "Input size: $inputSize x $inputSize"
+        )
+        Log.i(
+            "YOLO",
+            "Expected output: [1, $outputChannels, $outputCandidates]"
+        )
     }
 
     fun detect(source: Bitmap): List<Detection> {
 
-        if (source.isRecycled ||
+        if (
+            source.isRecycled ||
             source.width <= 0 ||
             source.height <= 0
         ) {
@@ -63,18 +77,28 @@ class YoloDetector(context: Context) {
         val srcW = source.width.toFloat()
         val srcH = source.height.toFloat()
 
-        // Calculate letterbox dimensions.
+        // Calculate letterbox scale.
         val scale = min(
             inputSize / srcW,
             inputSize / srcH
         )
 
-        val resizedW = max(1, (srcW * scale).toInt())
-        val resizedH = max(1, (srcH * scale).toInt())
+        val resizedW = max(
+            1,
+            (srcW * scale).toInt()
+        )
 
-        // Use actual scales after integer rounding.
+        val resizedH = max(
+            1,
+            (srcH * scale).toInt()
+        )
+
+        // Actual scales after integer rounding.
         val scaleX = resizedW / srcW
         val scaleY = resizedH / srcH
+
+        val padX = (inputSize - resizedW) / 2
+        val padY = (inputSize - resizedH) / 2
 
         val resized = Bitmap.createScaledBitmap(
             source,
@@ -83,9 +107,6 @@ class YoloDetector(context: Context) {
             true
         )
 
-        val padX = (inputSize - resizedW) / 2
-        val padY = (inputSize - resizedH) / 2
-
         val inputBitmap = Bitmap.createBitmap(
             inputSize,
             inputSize,
@@ -93,6 +114,7 @@ class YoloDetector(context: Context) {
         )
 
         try {
+
             val canvas = Canvas(inputBitmap)
 
             canvas.drawColor(
@@ -111,15 +133,19 @@ class YoloDetector(context: Context) {
             )
 
         } finally {
+
             if (resized !== source) {
                 resized.recycle()
             }
         }
 
         // Convert image to RGB float tensor.
-        val pixels = IntArray(inputSize * inputSize)
+        val pixels = IntArray(
+            inputSize * inputSize
+        )
 
         try {
+
             inputBitmap.getPixels(
                 pixels,
                 0,
@@ -129,7 +155,9 @@ class YoloDetector(context: Context) {
                 inputSize,
                 inputSize
             )
+
         } finally {
+
             inputBitmap.recycle()
         }
 
@@ -153,7 +181,12 @@ class YoloDetector(context: Context) {
         val tensor = OnnxTensor.createTensor(
             env,
             FloatBuffer.wrap(input),
-            longArrayOf(1, 3, 640, 640)
+            longArrayOf(
+                1,
+                3,
+                inputSize.toLong(),
+                inputSize.toLong()
+            )
         )
 
         tensor.use { inputTensor ->
@@ -162,13 +195,24 @@ class YoloDetector(context: Context) {
                 mapOf(inputName to inputTensor)
             ).use { result ->
 
-                val data = flatten(result[0].value)
+                if (result.size() == 0) {
+                    Log.e("YOLO", "Model returned no output")
+                    return emptyList()
+                }
 
-                if (data.size != 5 * 8400) {
+                val data = flatten(
+                    result[0].value
+                )
+
+                val expectedSize =
+                    outputChannels * outputCandidates
+
+                if (data.size != expectedSize) {
 
                     Log.e(
                         "YOLO",
-                        "Unexpected output size: ${data.size}"
+                        "Unexpected output size: ${data.size}, " +
+                            "expected: $expectedSize"
                     )
 
                     return emptyList()
@@ -187,31 +231,59 @@ class YoloDetector(context: Context) {
         }
     }
 
+    // Flatten nested ONNX output arrays.
     private fun flatten(value: Any): FloatArray {
 
-        val output = mutableListOf<Float>()
+        val output = FloatArray(
+            outputChannels * outputCandidates
+        )
+
+        var index = 0
 
         fun walk(item: Any?) {
 
             when (item) {
 
                 is FloatArray -> {
-                    item.forEach {
-                        output.add(it)
+
+                    for (number in item) {
+
+                        if (index >= output.size) {
+                            throw IllegalStateException(
+                                "ONNX output contains too many values"
+                            )
+                        }
+
+                        output[index++] = number
                     }
                 }
 
                 is Array<*> -> {
+
                     item.forEach {
                         walk(it)
                     }
+                }
+
+                else -> {
+
+                    throw IllegalStateException(
+                        "Unsupported ONNX output type: " +
+                            (item?.javaClass?.name ?: "null")
+                    )
                 }
             }
         }
 
         walk(value)
 
-        return output.toFloatArray()
+        if (index != output.size) {
+            throw IllegalStateException(
+                "Incomplete ONNX output: $index / ${output.size}"
+            )
+        }
+
+        return output
     }
 
     // Model output: [1, 5, 8400]
@@ -225,7 +297,7 @@ class YoloDetector(context: Context) {
         padY: Float
     ): List<Detection> {
 
-        val n = 8400
+        val n = outputCandidates
 
         val candidates = mutableListOf<Detection>()
 
@@ -284,6 +356,15 @@ class YoloDetector(context: Context) {
                 cy + h / 2f - padY
             ) / scaleY
 
+            if (
+                !left.isFinite() ||
+                !top.isFinite() ||
+                !right.isFinite() ||
+                !bottom.isFinite()
+            ) {
+                continue
+            }
+
             val detection = Detection(
                 left = left.coerceIn(0f, srcW),
                 top = top.coerceIn(0f, srcH),
@@ -306,25 +387,36 @@ class YoloDetector(context: Context) {
                 "Candidates: $detectedCandidates"
         )
 
-        // Limit NMS workload while preserving
-        // the highest-confidence candidates.
+        // Keep highest-confidence candidates.
         val limitedCandidates = candidates
-            .sortedByDescending { it.confidence }
+            .sortedByDescending {
+                it.confidence
+            }
             .take(maxCandidates)
 
-        return nms(
+        val results = nms(
             limitedCandidates,
             nmsThreshold
         ).take(maxDetections)
+
+        Log.i(
+            "YOLO",
+            "Final detections: ${results.size}"
+        )
+
+        return results
     }
 
+    // Non-Maximum Suppression.
     private fun nms(
         items: List<Detection>,
         threshold: Float
     ): List<Detection> {
 
         val sorted = items
-            .sortedByDescending { it.confidence }
+            .sortedByDescending {
+                it.confidence
+            }
             .toMutableList()
 
         val kept = mutableListOf<Detection>()
@@ -341,7 +433,9 @@ class YoloDetector(context: Context) {
 
                 val candidate = iterator.next()
 
-                if (iou(best, candidate) > threshold) {
+                if (
+                    iou(best, candidate) > threshold
+                ) {
                     iterator.remove()
                 }
             }
@@ -361,24 +455,39 @@ class YoloDetector(context: Context) {
         val x2 = min(a.right, b.right)
         val y2 = min(a.bottom, b.bottom)
 
-        val interWidth = max(0f, x2 - x1)
-        val interHeight = max(0f, y2 - y1)
+        val interWidth = max(
+            0f,
+            x2 - x1
+        )
 
-        val intersection = interWidth * interHeight
+        val interHeight = max(
+            0f,
+            y2 - y1
+        )
+
+        val intersection =
+            interWidth * interHeight
 
         val areaA =
             (a.right - a.left) *
-            (a.bottom - a.top)
+                (a.bottom - a.top)
 
         val areaB =
             (b.right - b.left) *
-            (b.bottom - b.top)
+                (b.bottom - b.top)
 
-        val union = areaA + areaB - intersection
+        val union =
+            areaA + areaB - intersection
 
-        if (union <= 0f) return 0f
+        if (
+            union <= 0f ||
+            !union.isFinite()
+        ) {
+            return 0f
+        }
 
-        return intersection / union
+        return (intersection / union)
+            .coerceIn(0f, 1f)
     }
 
     fun close() {
