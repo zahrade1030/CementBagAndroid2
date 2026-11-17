@@ -1,3 +1,4 @@
+
 package com.vea.cementbagcounter
 
 import kotlin.math.sqrt
@@ -15,7 +16,6 @@ class SimpleLineCounter {
         val id: Int,
         var x: Float,
         var y: Float,
-        var previousY: Float,
         var velocityX: Float = 0f,
         var velocityY: Float = 0f,
         var armed: Boolean = false,
@@ -38,12 +38,28 @@ class SimpleLineCounter {
 
     private val maxMissedFrames = 12
     private val maxDistance = 140f
+    private val maxAllowedDistance = 220f
+
     private val positionSmoothing = 0.65f
     private val velocitySmoothing = 0.5f
 
+    private val minimumLineGap = 20f
+
     fun setLines(top: Float, bottom: Float) {
-        topLine = minOf(top, bottom)
-        bottomLine = maxOf(top, bottom)
+
+        val newTop = minOf(top, bottom)
+        val newBottom = maxOf(top, bottom)
+
+        if (newBottom - newTop < minimumLineGap) return
+
+        if (newTop != topLine || newBottom != bottomLine) {
+            topLine = newTop
+            bottomLine = newBottom
+
+            // Old tracks belong to the previous line configuration.
+            tracks.clear()
+            nextId = 1
+        }
     }
 
     fun reset() {
@@ -66,39 +82,48 @@ class SimpleLineCounter {
 
     fun update(detections: List<Detection>): Int {
 
-        tracks.values.forEach { it.missed++ }
+        tracks.values.forEach {
+            it.missed++
+        }
 
         var newCounts = 0
 
+        // Ignore invalid detection coordinates.
+        val validDetections = detections.filter {
+            it.cx.isFinite() &&
+                it.cy.isFinite()
+        }
+
         val candidates = mutableListOf<Match>()
 
-        // Predict each track's next position and compare it
-        // with all current detections.
+        // Predict the next position of each existing track.
         for (track in tracks.values) {
 
             if (track.missed > maxMissedFrames) continue
 
+            val elapsed = track.missed.coerceAtLeast(1).toFloat()
+
             val predictedX =
-                track.x + track.velocityX * track.missed
+                track.x + track.velocityX * elapsed
 
             val predictedY =
-                track.y + track.velocityY * track.missed
+                track.y + track.velocityY * elapsed
 
             val allowedDistance = minOf(
-                maxDistance + track.missed * 5f,
-                180f
+                maxDistance + track.missed * 6f,
+                maxAllowedDistance
             )
 
-            for (index in detections.indices) {
+            for (index in validDetections.indices) {
 
-                val detection = detections[index]
+                val detection = validDetections[index]
 
                 val dx = predictedX - detection.cx
                 val dy = predictedY - detection.cy
 
                 val distance = sqrt(dx * dx + dy * dy)
 
-                if (distance < allowedDistance) {
+                if (distance <= allowedDistance) {
                     candidates.add(
                         Match(track, index, distance)
                     )
@@ -106,7 +131,7 @@ class SimpleLineCounter {
             }
         }
 
-        // Assign the closest pairs first.
+        // Match the closest track-detection pairs first.
         candidates.sortBy { it.distance }
 
         val matchedTrackIds = mutableSetOf<Int>()
@@ -117,7 +142,10 @@ class SimpleLineCounter {
         for (match in candidates) {
 
             if (match.track.id in matchedTrackIds) continue
-            if (match.detectionIndex in matchedDetectionIndices) continue
+
+            if (match.detectionIndex in matchedDetectionIndices) {
+                continue
+            }
 
             matchedTrackIds.add(match.track.id)
             matchedDetectionIndices.add(match.detectionIndex)
@@ -125,79 +153,96 @@ class SimpleLineCounter {
             assignments.add(match)
         }
 
-        // Update matched tracks.
+        // Update matched tracks and check line crossing.
         for (match in assignments) {
 
             val track = match.track
-            val detection = detections[match.detectionIndex]
+            val detection = validDetections[match.detectionIndex]
 
+            val oldX = track.x
             val oldY = track.y
-            val elapsedFrames = track.missed.coerceAtLeast(1).toFloat()
 
-            track.previousY = oldY
+            val elapsed =
+                track.missed.coerceAtLeast(1).toFloat()
 
             val measuredVelocityX =
-                (detection.cx - track.x) / elapsedFrames
+                (detection.cx - oldX) / elapsed
 
             val measuredVelocityY =
-                (detection.cy - track.y) / elapsedFrames
+                (detection.cy - oldY) / elapsed
 
             track.velocityX =
                 track.velocityX * (1f - velocitySmoothing) +
-                measuredVelocityX * velocitySmoothing
+                    measuredVelocityX * velocitySmoothing
 
             track.velocityY =
                 track.velocityY * (1f - velocitySmoothing) +
-                measuredVelocityY * velocitySmoothing
+                    measuredVelocityY * velocitySmoothing
 
+            // Smooth displayed tracking position.
             track.x =
-                track.x * (1f - positionSmoothing) +
-                detection.cx * positionSmoothing
+                oldX * (1f - positionSmoothing) +
+                    detection.cx * positionSmoothing
 
             track.y =
-                track.y * (1f - positionSmoothing) +
-                detection.cy * positionSmoothing
+                oldY * (1f - positionSmoothing) +
+                    detection.cy * positionSmoothing
 
             track.missed = 0
 
-            if (track.y > topLine && track.y < bottomLine) {
+            val newY = detection.cy
+
+            // Arm the track when it enters the counting zone
+            // from above, including when it crosses both lines
+            // between two consecutive detections.
+            val enteredCountingZone =
+                oldY <= topLine && newY > topLine
+
+            val currentlyInsideZone =
+                newY > topLine && newY < bottomLine
+
+            if (enteredCountingZone || currentlyInsideZone) {
                 track.armed = true
             }
 
-            // Count only one downward crossing per track.
+            // Count only downward crossing of the bottom line.
             if (
                 track.armed &&
                 !track.counted &&
                 oldY < bottomLine &&
-                track.y >= bottomLine
+                newY >= bottomLine
             ) {
                 track.counted = true
                 newCounts++
             }
         }
 
-        // Create tracks for unmatched detections.
-        for (index in detections.indices) {
+        // Create new tracks for unmatched detections.
+        for (index in validDetections.indices) {
 
             if (index in matchedDetectionIndices) continue
 
-            val detection = detections[index]
+            val detection = validDetections[index]
 
             val track = Track(
                 id = nextId++,
                 x = detection.cx,
-                y = detection.cy,
-                previousY = detection.cy
+                y = detection.cy
             )
 
-            if (track.y > topLine && track.y < bottomLine) {
+            // A newly detected object inside the counting zone
+            // is ready to be counted when it crosses the bottom line.
+            if (
+                track.y > topLine &&
+                track.y < bottomLine
+            ) {
                 track.armed = true
             }
 
             tracks[track.id] = track
         }
 
-        // Remove tracks that have been missing too long.
+        // Remove tracks missing for too many frames.
         tracks.entries.removeAll {
             it.value.missed > maxMissedFrames
         }
