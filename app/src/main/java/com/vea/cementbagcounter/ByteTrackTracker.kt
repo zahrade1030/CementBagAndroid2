@@ -27,37 +27,50 @@ class ByteTrackTracker(
         var missed: Int = 0,
         var hits: Int = 1
     ) {
-        fun predict(): Detection {
+
+        fun predict(framesAhead: Int = 1): Detection {
+            val steps = framesAhead.coerceAtLeast(1).toFloat()
+
+            val dx = vx * steps
+            val dy = vy * steps
+            val dw = vw * steps
+            val dh = vh * steps
+
             return Detection(
-                left = box.left + vx,
-                top = box.top + vy,
-                right = box.right + vx + vw,
-                bottom = box.bottom + vy + vh,
+                left = box.left + dx,
+                top = box.top + dy,
+                right = box.right + dx + dw,
+                bottom = box.bottom + dy + dh,
                 confidence = box.confidence
             )
         }
 
         fun update(detection: Detection) {
             val old = box
-            val predicted = predict()
+            val elapsedFrames = (missed + 1).toFloat()
 
-            vx = 0.7f * vx +
-                0.3f * (detection.cx - old.cx)
+            val observedVx =
+                (detection.cx - old.cx) / elapsedFrames
 
-            vy = 0.7f * vy +
-                0.3f * (detection.cy - old.cy)
+            val observedVy =
+                (detection.cy - old.cy) / elapsedFrames
 
-            vw = 0.7f * vw +
-                0.3f * (
-                    (detection.right - detection.left) -
-                    (old.right - old.left)
-                )
+            val oldWidth = old.right - old.left
+            val oldHeight = old.bottom - old.top
 
-            vh = 0.7f * vh +
-                0.3f * (
-                    (detection.bottom - detection.top) -
-                    (old.bottom - old.top)
-                )
+            val newWidth = detection.right - detection.left
+            val newHeight = detection.bottom - detection.top
+
+            val observedVw =
+                (newWidth - oldWidth) / elapsedFrames
+
+            val observedVh =
+                (newHeight - oldHeight) / elapsedFrames
+
+            vx = 0.7f * vx + 0.3f * observedVx
+            vy = 0.7f * vy + 0.3f * observedVy
+            vw = 0.7f * vw + 0.3f * observedVw
+            vh = 0.7f * vh + 0.3f * observedVh
 
             box = detection
             missed = 0
@@ -81,6 +94,10 @@ class ByteTrackTracker(
             it.confidence.isFinite() &&
                 it.cx.isFinite() &&
                 it.cy.isFinite() &&
+                it.left.isFinite() &&
+                it.top.isFinite() &&
+                it.right.isFinite() &&
+                it.bottom.isFinite() &&
                 it.right > it.left &&
                 it.bottom > it.top
         }
@@ -112,7 +129,7 @@ class ByteTrackTracker(
             matchedLow
         )
 
-        // Create new tracks only from sufficiently confident detections.
+        // Create new tracks only from high-confidence detections.
         for (index in high.indices) {
             if (index in matchedHigh) continue
 
@@ -158,11 +175,14 @@ class ByteTrackTracker(
         val candidates = mutableListOf<Candidate>()
 
         for (track in tracks) {
+
             if (track.id in matchedTracks) continue
 
-            val predicted = track.predict()
+            // Predict according to the number of missed frames.
+            val predicted = track.predict(track.missed)
 
             for (index in detections.indices) {
+
                 if (index in matchedDetections) continue
 
                 val overlap = iou(
@@ -170,21 +190,27 @@ class ByteTrackTracker(
                     detections[index]
                 )
 
-                // Ultralytics ByteTrack uses a cost threshold.
-                // Cost = 1 - IoU.
                 val cost = 1f - overlap
 
                 if (cost <= matchThreshold) {
                     candidates.add(
-                        Candidate(track, index, overlap)
+                        Candidate(
+                            track = track,
+                            detectionIndex = index,
+                            iou = overlap
+                        )
                     )
                 }
             }
         }
 
-        candidates.sortByDescending { it.iou }
+        // Match the strongest overlaps first.
+        candidates.sortByDescending {
+            it.iou
+        }
 
         for (candidate in candidates) {
+
             val track = candidate.track
             val index = candidate.detectionIndex
 
@@ -215,11 +241,11 @@ class ByteTrackTracker(
 
         val areaA =
             max(0f, a.right - a.left) *
-            max(0f, a.bottom - a.top)
+                max(0f, a.bottom - a.top)
 
         val areaB =
             max(0f, b.right - b.left) *
-            max(0f, b.bottom - b.top)
+                max(0f, b.bottom - b.top)
 
         val union = areaA + areaB - intersection
 
