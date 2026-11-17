@@ -1,0 +1,52 @@
+
+name: Inspect ONNX Model
+
+on:
+  workflow_dispatch:
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install ONNX
+        run: pip install onnx==1.17.0
+
+      - name: Inspect model
+        run: |
+          python - <<'PY'
+          import onnx
+          from pathlib import Path
+
+          path = Path("app/src/main/assets/best.onnx")
+
+          if not path.exists():
+              raise FileNotFoundError("best.onnx not found!")
+
+          model = onnx.load(str(path))
+
+          print("MODEL FOUND:", path)
+          print("\nINPUTS:")
+          for item in model.graph.input:
+              dims = [
+                  d.dim_value if d.dim_value else d.dim_param
+                  for d in item.type.tensor_type.shape.dim
+              ]
+              print(item.name, dims)
+
+          print("\nOUTPUTS:")
+          for item in model.graph.output:
+              dims = [
+                  d.dim_value if d.dim_value else d.dim_param
+                  for d in item.type.tensor_type.shape.dim
+              ]
+              print(item.name, dims)
+          PY
