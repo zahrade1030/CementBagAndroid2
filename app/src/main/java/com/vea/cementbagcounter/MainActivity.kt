@@ -52,7 +52,7 @@ class MainActivity : AppCompatActivity() {
     private var guideVisible = true
     private var guideOpacity = 0.35f
 
-    private val tracker = ByteTrackLineCounter()
+    private val tracker = SimpleLineCounter()
 
     private val permission =
         registerForActivityResult(
