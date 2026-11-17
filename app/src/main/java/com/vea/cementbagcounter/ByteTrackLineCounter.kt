@@ -18,6 +18,7 @@ class ByteTrackLineCounter {
     private var bottomLine = 411f
 
     private val maxStateMissed = 30
+    private val maxCrossingGap = 5
 
     private var trackedPoints = emptyList<TrackedPoint>()
 
@@ -50,7 +51,7 @@ class ByteTrackLineCounter {
 
         var newCounts = 0
 
-        // Mark all states as temporarily missing.
+        // Mark existing states as temporarily missing.
         states.values.forEach {
             it.missed++
         }
@@ -67,9 +68,11 @@ class ByteTrackLineCounter {
                 LineState()
             }
 
+            val previousMissed = state.missed
+
             state.missed = 0
 
-            // Python logic: entering the area arms the track.
+            // Arm the track when it enters the counting area.
             if (
                 centerY > topLine &&
                 centerY < bottomLine
@@ -79,10 +82,15 @@ class ByteTrackLineCounter {
 
             val oldY = state.previousY
 
-            // Count only upward crossing of the first line.
-            val crossedTopUpward =
+            // Only bridge short tracking gaps.
+            val canCheckCrossing =
                 oldY != null &&
-                oldY > topLine &&
+                previousMissed <= maxCrossingGap
+
+            // Count upward crossing of the top line.
+            val crossedTopUpward =
+                canCheckCrossing &&
+                oldY!! > topLine &&
                 centerY <= topLine
 
             if (
@@ -92,6 +100,14 @@ class ByteTrackLineCounter {
             ) {
                 state.counted = true
                 newCounts++
+            }
+
+            // If the tracking gap was too long,
+            // require the object to enter the area again.
+            if (previousMissed > maxCrossingGap) {
+                state.armed =
+                    centerY > topLine &&
+                    centerY < bottomLine
             }
 
             state.previousY = centerY
@@ -106,15 +122,7 @@ class ByteTrackLineCounter {
             )
         }
 
-        // If a track disappears temporarily, do not assume
-        // it crossed a line while it was invisible.
-        states.values.forEach { state ->
-            if (state.missed > 0) {
-                state.previousY = null
-            }
-        }
-
-        // Keep states while ByteTrack may still recover their IDs.
+        // Remove states that are no longer recoverable.
         states.entries.removeAll {
             it.value.missed > maxStateMissed
         }
