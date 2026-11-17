@@ -35,7 +35,7 @@ class MainActivity : AppCompatActivity() {
     private var totalCount = 0
     private var qualityFrameCounter = 0
 
-    private val tracker = SimpleLineCounter()
+    private val tracker = ByteTrackLineCounter()
 
     private val permission =
         registerForActivityResult(
