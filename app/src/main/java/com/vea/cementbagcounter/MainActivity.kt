@@ -1,3 +1,4 @@
+
 package com.vea.cementbagcounter
 
 import android.Manifest
@@ -16,6 +17,7 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import java.util.concurrent.Executors
+import kotlin.math.max
 
 class MainActivity : AppCompatActivity() {
 
@@ -23,6 +25,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var overlay: DetectionOverlay
     private lateinit var countText: TextView
     private lateinit var statusText: TextView
+    private lateinit var qualityText: TextView
     private lateinit var detector: YoloDetector
 
     private val executor = Executors.newSingleThreadExecutor()
@@ -30,6 +33,7 @@ class MainActivity : AppCompatActivity() {
     private var running = true
     private var setupMode = true
     private var totalCount = 0
+    private var qualityFrameCounter = 0
 
     private val tracker = SimpleLineCounter()
 
@@ -109,6 +113,14 @@ class MainActivity : AppCompatActivity() {
             textSize = 14f
             setTextColor(Color.LTGRAY)
             gravity = Gravity.CENTER
+            setPadding(8, 4, 8, 4)
+        }
+
+        qualityText = TextView(this).apply {
+            text = "کیفیت تصویر: در حال بررسی..."
+            textSize = 13f
+            setTextColor(Color.LTGRAY)
+            gravity = Gravity.CENTER
             setPadding(8, 4, 8, 8)
         }
 
@@ -166,6 +178,7 @@ class MainActivity : AppCompatActivity() {
 
         base.addView(countText)
         base.addView(statusText)
+        base.addView(qualityText)
         base.addView(buttons)
 
         setContentView(base)
@@ -203,6 +216,22 @@ class MainActivity : AppCompatActivity() {
 
                 try {
 
+                    qualityFrameCounter++
+
+                    if (qualityFrameCounter % 8 == 0) {
+                        val quality = analyzeImageQuality(image)
+
+                        if (quality != null) {
+                            runOnUiThread {
+                                qualityText.text =
+                                    getQualityMessage(
+                                        quality.first,
+                                        quality.second
+                                    )
+                            }
+                        }
+                    }
+
                     bitmap = ImageUtil.toBitmap(image)
 
                     val detections = detector.detect(bitmap)
@@ -212,7 +241,7 @@ class MainActivity : AppCompatActivity() {
 
                     runOnUiThread {
 
-                        if (!setupMode) {
+                        if (!setupMode && running) {
 
                             totalCount += tracker.update(detections)
 
@@ -274,6 +303,113 @@ class MainActivity : AppCompatActivity() {
             }
 
         }, ContextCompat.getMainExecutor(this))
+    }
+
+    private fun analyzeImageQuality(
+        image: ImageProxy
+    ): Pair<Float, Float>? {
+
+        return try {
+
+            val plane = image.planes.firstOrNull() ?: return null
+            val buffer = plane.buffer
+            val width = image.width
+            val height = image.height
+            val rowStride = plane.rowStride
+            val pixelStride = plane.pixelStride
+
+            if (width < 8 || height < 8) return null
+
+            var brightnessSum = 0.0
+            var brightnessCount = 0
+
+            var sharpnessSum = 0.0
+            var sharpnessCount = 0
+
+            val step = 4
+
+            fun pixel(x: Int, y: Int): Int {
+                val index =
+                    y * rowStride + x * pixelStride
+
+                return buffer.get(index).toInt() and 0xFF
+            }
+
+            for (y in step until height - step step step) {
+                for (x in step until width - step step step) {
+
+                    val center = pixel(x, y)
+
+                    brightnessSum += center
+                    brightnessCount++
+
+                    val left = pixel(x - step, y)
+                    val right = pixel(x + step, y)
+                    val top = pixel(x, y - step)
+                    val bottom = pixel(x, y + step)
+
+                    val laplacian =
+                        left + right + top + bottom - 4 * center
+
+                    sharpnessSum +=
+                        laplacian.toDouble() * laplacian.toDouble()
+
+                    sharpnessCount++
+                }
+            }
+
+            if (brightnessCount == 0 || sharpnessCount == 0) {
+                return null
+            }
+
+            val brightness =
+                (brightnessSum / brightnessCount).toFloat()
+
+            val sharpness =
+                (sharpnessSum / sharpnessCount).toFloat()
+
+            Pair(brightness, sharpness)
+
+        } catch (e: Exception) {
+
+            android.util.Log.e(
+                "IMAGE_QUALITY",
+                "Quality analysis failed",
+                e
+            )
+
+            null
+        }
+    }
+
+    private fun getQualityMessage(
+        brightness: Float,
+        sharpness: Float
+    ): String {
+
+        val messages = mutableListOf<String>()
+
+        when {
+            brightness < 55f ->
+                messages.add("نور محیط کم است")
+
+            brightness > 205f ->
+                messages.add("نور تصویر بیش از حد زیاد است")
+        }
+
+        when {
+            sharpness < 35f ->
+                messages.add("احتمال تاری تصویر وجود دارد")
+
+            sharpness < 100f ->
+                messages.add("وضوح تصویر متوسط است")
+        }
+
+        if (messages.isEmpty()) {
+            return "کیفیت تصویر: مناسب"
+        }
+
+        return "کیفیت تصویر: " + messages.joinToString(" | ")
     }
 
     override fun onDestroy() {
