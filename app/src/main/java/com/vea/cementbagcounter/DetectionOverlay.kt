@@ -1,3 +1,4 @@
+
 package com.vea.cementbagcounter
 
 import android.content.Context
@@ -8,62 +9,129 @@ import android.view.MotionEvent
 import android.view.View
 import kotlin.math.abs
 import kotlin.math.max
-import kotlin.math.min
 
 class DetectionOverlay(context: Context) : View(context) {
 
     var isSetup = true
+
     var lineTop = 150f
+        private set
+
     var lineBottom = 411f
+        private set
 
     private var imageW = 640f
     private var imageH = 640f
 
     private var points: List<TrackedPoint> = emptyList()
 
-    private val pointPaint = Paint(3).apply {
+    private val pointPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.GREEN
         style = Paint.Style.FILL
     }
 
-    private val ringPaint = Paint(3).apply {
+    private val ringPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.WHITE
         style = Paint.Style.STROKE
         strokeWidth = 3f
     }
 
-    private val linePaint = Paint(3).apply {
+    private val linePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.YELLOW
         strokeWidth = 5f
+        style = Paint.Style.STROKE
     }
 
-    private val textPaint = Paint(3).apply {
+    private val handlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.YELLOW
+        style = Paint.Style.FILL
+    }
+
+    private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.WHITE
         textSize = 30f
+        style = Paint.Style.FILL
+    }
+
+    private val backgroundPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.argb(150, 0, 0, 0)
+        style = Paint.Style.FILL
     }
 
     private var dragging = 0
 
-    fun setTrackedPoints(list: List<TrackedPoint>, w: Int, h: Int) {
-        points = list
+    private val minimumLineGap = 40f
+    private val touchTolerance = 35f
+
+    private fun imageScale(): Float {
+        if (imageW <= 0f || imageH <= 0f ||
+            width <= 0 || height <= 0
+        ) return 1f
+
+        return max(width / imageW, height / imageH)
+    }
+
+    private fun offsetX(scale: Float): Float {
+        return (width - imageW * scale) / 2f
+    }
+
+    private fun offsetY(scale: Float): Float {
+        return (height - imageH * scale) / 2f
+    }
+
+    fun setImageSize(w: Int, h: Int) {
+        if (w <= 0 || h <= 0) return
+
         imageW = w.toFloat()
         imageH = h.toFloat()
+
+        lineTop = lineTop.coerceIn(20f, imageH - 20f)
+        lineBottom = lineBottom.coerceIn(
+            lineTop + minimumLineGap,
+            imageH - 20f
+        )
+
         invalidate()
+    }
+
+    fun setTrackedPoints(
+        list: List<TrackedPoint>,
+        w: Int,
+        h: Int
+    ) {
+        setImageSize(w, h)
+        points = list.toList()
+        invalidate()
+    }
+
+    fun getLines(): Pair<Float, Float> {
+        return Pair(lineTop, lineBottom)
     }
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
 
-        if (imageW <= 0f || imageH <= 0f || width == 0 || height == 0) return
+        if (
+            imageW <= 0f ||
+            imageH <= 0f ||
+            width == 0 ||
+            height == 0
+        ) return
 
-        val scale = max(width / imageW, height / imageH)
-        val offsetX = (width - imageW * scale) / 2f
-        val offsetY = (height - imageH * scale) / 2f
+        val scale = imageScale()
+        val ox = offsetX(scale)
+        val oy = offsetY(scale)
 
+        // Draw tracked object centers
         points.forEach { point ->
 
-            val x = point.x * scale + offsetX
-            val y = point.y * scale + offsetY
+            val x = point.x * scale + ox
+            val y = point.y * scale + oy
+
+            if (
+                x < 0f || x > width.toFloat() ||
+                y < 0f || y > height.toFloat()
+            ) return@forEach
 
             pointPaint.color =
                 if (point.counted) Color.CYAN else Color.GREEN
@@ -79,64 +147,156 @@ class DetectionOverlay(context: Context) : View(context) {
             )
         }
 
-        canvas.drawLine(
-            offsetX,
-            lineTop * scale + offsetY,
-            offsetX + imageW * scale,
-            lineTop * scale + offsetY,
-            linePaint
-        )
+        // Draw counting lines
+        val left = ox
+        val right = ox + imageW * scale
 
-        canvas.drawLine(
-            offsetX,
-            lineBottom * scale + offsetY,
-            offsetX + imageW * scale,
-            lineBottom * scale + offsetY,
-            linePaint
+        val topY = lineTop * scale + oy
+        val bottomY = lineBottom * scale + oy
+
+        linePaint.color = Color.YELLOW
+        linePaint.strokeWidth = 5f
+
+        canvas.drawLine(left, topY, right, topY, linePaint)
+        canvas.drawLine(left, bottomY, right, bottomY, linePaint)
+
+        if (isSetup) {
+
+            val handleRadius = 13f
+
+            canvas.drawCircle(
+                width / 2f,
+                topY,
+                handleRadius,
+                handlePaint
+            )
+
+            canvas.drawCircle(
+                width / 2f,
+                bottomY,
+                handleRadius,
+                handlePaint
+            )
+
+            drawLabel(
+                canvas,
+                "خط اول",
+                left + 12f,
+                topY - 12f
+            )
+
+            drawLabel(
+                canvas,
+                "خط دوم",
+                left + 12f,
+                bottomY - 12f
+            )
+        }
+
+        val message =
+            if (isSetup) "خطوط را جابه‌جا کن"
+            else "ردیابی فعال"
+
+        canvas.drawRoundRect(
+            8f,
+            8f,
+            245f,
+            52f,
+            8f,
+            8f,
+            backgroundPaint
         )
 
         canvas.drawText(
-            if (isSetup) "خطوط را جابه‌جا کن" else "ردیابی فعال",
+            message,
             18f,
-            38f,
+            39f,
             textPaint
         )
     }
 
+    private fun drawLabel(
+        canvas: Canvas,
+        label: String,
+        x: Float,
+        y: Float
+    ) {
+        canvas.drawText(label, x, y, textPaint)
+    }
+
     override fun onTouchEvent(event: MotionEvent): Boolean {
+
         if (!isSetup) return false
 
-        val scale = max(width / imageW, height / imageH)
-        val offsetY = (height - imageH * scale) / 2f
+        if (width == 0 || height == 0) return false
+
+        val scale = imageScale()
+        val oy = offsetY(scale)
 
         when (event.action) {
 
             MotionEvent.ACTION_DOWN -> {
-                val y = (event.y - offsetY) / scale
 
-                dragging =
-                    if (abs(y - lineTop) < abs(y - lineBottom)) 1 else 2
+                val imageY = (event.y - oy) / scale
 
-                return true
+                val distanceTop = abs(imageY - lineTop)
+                val distanceBottom = abs(imageY - lineBottom)
+
+                dragging = when {
+                    distanceTop <= touchTolerance &&
+                        distanceTop <= distanceBottom -> 1
+
+                    distanceBottom <= touchTolerance -> 2
+
+                    else -> 0
+                }
+
+                return dragging != 0
             }
 
             MotionEvent.ACTION_MOVE -> {
-                val y = ((event.y - offsetY) / scale)
+
+                if (dragging == 0) return false
+
+                val imageY = ((event.y - oy) / scale)
                     .coerceIn(20f, imageH - 20f)
 
-                if (dragging == 1) lineTop = y
-                else if (dragging == 2) lineBottom = y
+                when (dragging) {
+
+                    1 -> {
+                        lineTop = imageY.coerceAtMost(
+                            lineBottom - minimumLineGap
+                        )
+                    }
+
+                    2 -> {
+                        lineBottom = imageY.coerceAtLeast(
+                            lineTop + minimumLineGap
+                        ).coerceAtMost(imageH - 20f)
+                    }
+                }
 
                 invalidate()
                 return true
             }
 
-            MotionEvent.ACTION_UP -> {
+            MotionEvent.ACTION_UP,
+            MotionEvent.ACTION_CANCEL -> {
+
+                val wasDragging = dragging != 0
                 dragging = 0
-                return true
+
+                performClick()
+
+                return wasDragging
             }
         }
 
+        return true
+    }
+
+    override fun performClick(): Boolean {
+        super.performClick()
         return true
     }
 }
